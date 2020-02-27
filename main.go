@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,8 @@ const (
 type Game struct {
 	AcceptedHands []string
 	Rules         map[string]Rule
+	Score         *Score
+	sync.Mutex
 }
 
 func (game Game) play(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -33,7 +36,29 @@ func (game Game) play(w http.ResponseWriter, r *http.Request, ps httprouter.Para
 		computerHand := createComputerHand(game.AcceptedHands)
 		response = evaluateHand(playerHand, computerHand, game.Rules)
 	}
+	game.Score = game.updateScore(response, game.Score)
 	b, err := json.Marshal(response)
+	w.WriteHeader(http.StatusOK)
+	w.Write(b)
+}
+
+func (game Game) updateScore(response Response, currentScore *Score) *Score {
+	game.Lock()
+	defer game.Unlock()
+	if response.Result == WIN {
+		currentScore.Wins = currentScore.Wins + 1
+	}
+	if response.Result == LOST {
+		currentScore.Losses = currentScore.Losses + 1
+	}
+	if response.Result == DRAW {
+		currentScore.Draws = currentScore.Draws + 1
+	}
+	return currentScore
+}
+
+func (game Game) getScore(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	b, _ := json.Marshal(game.Score)
 	w.WriteHeader(http.StatusOK)
 	w.Write(b)
 }
@@ -45,10 +70,16 @@ func main() {
 	game := Game{
 		AcceptedHands: acceptedHands,
 		Rules:         rules,
+		Score: &Score{
+			Wins:   0,
+			Losses: 0,
+			Draws:  0,
+		},
 	}
 
 	router := httprouter.New()
 	router.POST("/game", game.play)
+	router.GET("/score", game.getScore)
 
 	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(PORT), router))
 	return
@@ -126,6 +157,12 @@ func createRules(acceptedHands []string) map[string]Rule {
 	}
 
 	return rules
+}
+
+type Score struct {
+	Wins   int `json:"Wins"`
+	Losses int `json:"Losses"`
+	Draws  int `json:"Draws"`
 }
 
 type Rule struct {
